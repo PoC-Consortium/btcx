@@ -4,7 +4,7 @@ members = [
     "params-btcx",
     "keys-btcx",
     "seedstore",
-    # "electrum-btcx",  # stage B
+    "electrum-btcx",
     # "wallet-btcx",    # stage B
 ]
 
@@ -18,11 +18,17 @@ repository = "https://github.com/PoC-Consortium/btcx"
 params-btcx = { path = "params-btcx" }
 keys-btcx = { path = "keys-btcx" }
 seedstore = { path = "seedstore" }
-# electrum-btcx = { path = "electrum-btcx" }  # stage B
+electrum-btcx = { path = "electrum-btcx" }
 # wallet-btcx = { path = "wallet-btcx" }  # stage B
 
 # Bitcoin stack — versions must stay mutually compatible (all on bitcoin 0.32).
 bitcoin = { version = "0.32", features = ["serde", "rand-std"] }
+# rusqlite feature: bdk's sqlite persister (bundled libsqlite3-sys).
+bdk_wallet = { version = "2", features = ["rusqlite"] }
+electrum-client = "0.21"
+# electrum-btcx dials Electrum ssl:// itself (accept-any-cert verifier);
+# host applications may install their own process CryptoProvider first.
+rustls = "0.23"
 bech32 = "0.11"
 bip39 = "2"
 
@@ -35,6 +41,8 @@ keyring = { version = "3", features = ["apple-native", "windows-native"] }
 rand = "0.8"
 
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.8"
 anyhow = "1"
+thiserror = "1"
 hex = "0.4"

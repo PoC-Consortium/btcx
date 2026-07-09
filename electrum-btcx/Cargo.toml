@@ -1,0 +1,19 @@
+[package]
+name = "electrum-btcx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Electrum connection layer for Bitcoin and Bitcoin PoCX (BTCX): raw-header-safe chain reads, scripthash subscriptions, a background BDK sync worker, and passive server health"
+
+[dependencies]
+params-btcx = { workspace = true }
+anyhow = { workspace = true }
+bitcoin = { workspace = true }
+bdk_wallet = { workspace = true }
+electrum-client = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
