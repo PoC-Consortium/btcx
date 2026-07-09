@@ -1,0 +1,16 @@
+[package]
+name = "params-btcx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chain parameters, coin registry and coins.toml loader for Bitcoin and Bitcoin PoCX (BTCX): header formats/hashing, bech32(m) addresses"
+
+[dependencies]
+anyhow = { workspace = true }
+bech32 = { workspace = true }
+bitcoin = { workspace = true }
+hex = { workspace = true }
+keys-btcx = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
