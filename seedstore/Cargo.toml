@@ -1,0 +1,31 @@
+[package]
+name = "seedstore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Encrypted-at-rest BIP39 seed storage: scrypt + ChaCha20-Poly1305 passphrase wrap (PACTSEEDv1), OS-keystore machine key, obfuscation fallback"
+
+[features]
+default = ["os-keyring"]
+# OS-keystore machine-key wrap (Windows Credential Manager / macOS Keychain).
+# Disable for mobile builds, which have no supported keystore backend — those
+# always take the obfuscation fallback for a no-passphrase seed.
+os-keyring = ["dep:keyring"]
+
+[dependencies]
+anyhow = { workspace = true }
+bip39 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+scrypt = { workspace = true }
+serde = { workspace = true }
+
+# The OS-keystore seed wrap (#120) is compiled only where the store is native
+# and unattended-friendly with no C deps: Windows Credential Manager / macOS
+# Keychain. Linux is deliberately excluded — a daemon-usable Secret Service
+# can't be relied on (headless has none; the sync backend needs libdbus), so
+# Linux always takes the obfuscation fallback instead of a fragile dbus dep.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+keyring = { workspace = true, optional = true }
