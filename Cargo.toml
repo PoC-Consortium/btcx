@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "params-btcx",
     "keys-btcx",
     # "electrum-btcx",  # stage B
     # "wallet-btcx",    # stage B
@@ -13,12 +14,17 @@ license = "MIT"
 repository = "https://github.com/PoC-Consortium/libs-btcx"
 
 [workspace.dependencies]
+params-btcx = { path = "params-btcx" }
 keys-btcx = { path = "keys-btcx" }
 # electrum-btcx = { path = "electrum-btcx" }  # stage B
 # wallet-btcx = { path = "wallet-btcx" }  # stage B
 
 # Bitcoin stack — versions must stay mutually compatible (all on bitcoin 0.32).
 bitcoin = { version = "0.32", features = ["serde", "rand-std"] }
+bech32 = "0.11"
 bip39 = "2"
 
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 anyhow = "1"
+hex = "0.4"
