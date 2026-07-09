@@ -5,7 +5,7 @@ members = [
     "keys-btcx",
     "seedstore",
     "electrum-btcx",
-    # "wallet-btcx",    # stage B
+    "wallet-btcx",
 ]
 
 [workspace.package]
@@ -19,7 +19,7 @@ params-btcx = { path = "params-btcx" }
 keys-btcx = { path = "keys-btcx" }
 seedstore = { path = "seedstore" }
 electrum-btcx = { path = "electrum-btcx" }
-# wallet-btcx = { path = "wallet-btcx" }  # stage B
+wallet-btcx = { path = "wallet-btcx" }
 
 # Bitcoin stack — versions must stay mutually compatible (all on bitcoin 0.32).
 bitcoin = { version = "0.32", features = ["serde", "rand-std"] }
