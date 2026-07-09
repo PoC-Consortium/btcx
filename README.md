@@ -1,14 +1,18 @@
-# libs-btcx
+# btcx
 
 Shared Rust wallet stack for **BTCX (Bitcoin PoCX)** applications — extracted
 from [satchel](https://github.com/PoC-Consortium/satchel)'s `libswap` so that
 Satchel, Phoenix (desktop + mobile), and headless tools maintain one wallet
-implementation.
+implementation. Companion workspace to
+[pocx](https://github.com/PoC-Consortium/pocx), which bundles the coin-agnostic
+consensus-framework crates the same way.
 
-Naming: bare *PoCX* names the coin-agnostic consensus framework
-(`pocx_miner`, `pocx_plotter`, …); the `-btcx` suffix marks Bitcoin-family
-infrastructure for the BTCX chain, like [electrs-btcx](https://github.com/PoC-Consortium/electrs-btcx)
-and [bindex-btcx](https://github.com/PoC-Consortium/bindex-btcx).
+Naming: bare *PoCX* names the consensus framework (`pocx_miner`,
+`pocx_plotter`, …); the `-btcx` suffix marks Bitcoin-family infrastructure for
+the BTCX chain, like [electrs-btcx](https://github.com/PoC-Consortium/electrs-btcx)
+and [bindex-btcx](https://github.com/PoC-Consortium/bindex-btcx). Those two
+stay separate repos (they track upstream romanz remotes); this workspace is
+greenfield crates only.
 
 ## Crates
 

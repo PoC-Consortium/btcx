@@ -12,7 +12,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/PoC-Consortium/libs-btcx"
+repository = "https://github.com/PoC-Consortium/btcx"
 
 [workspace.dependencies]
 params-btcx = { path = "params-btcx" }
