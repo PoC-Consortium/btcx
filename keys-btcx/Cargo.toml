@@ -1,0 +1,12 @@
+[package]
+name = "keys-btcx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "BIP39 mnemonic handling and BIP-86 wallet descriptor derivation for BTC and Bitcoin PoCX (BTCX)"
+
+[dependencies]
+anyhow = { workspace = true }
+bip39 = { workspace = true }
+bitcoin = { workspace = true }
