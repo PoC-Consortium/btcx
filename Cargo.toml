@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+    "params-btcx",
+    "keys-btcx",
+    "seedstore",
+    "electrum-btcx",
+    "wallet-btcx",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/PoC-Consortium/libs-btcx"
+
+[workspace.dependencies]
+params-btcx = { path = "params-btcx" }
+keys-btcx = { path = "keys-btcx" }
+seedstore = { path = "seedstore" }
+electrum-btcx = { path = "electrum-btcx" }
+wallet-btcx = { path = "wallet-btcx" }
