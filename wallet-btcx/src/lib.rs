@@ -216,7 +216,15 @@ impl WalletManager {
         let mut conn = Connection::open(&db_path)
             .with_context(|| format!("opening wallet db {}", db_path.display()))?;
 
-        let coin_type = registry::bip32_coin_type(coin_id)?;
+        // BTCX derives per-network: mainnet on the registered per-asset coin
+        // type, testnet/regtest on the shared SLIP-44 testnet coin type 1'
+        // (see `registry::btcx_coin_type`). Every other coin keeps its
+        // network-blind registry coin type.
+        let coin_type = if coin_id == registry::BTCX.id {
+            registry::btcx_coin_type(params.network)
+        } else {
+            registry::bip32_coin_type(coin_id)?
+        };
         let (external, internal) = seed.wallet_descriptors(kind, coin_type)?;
         let genesis = BlockHash::from_str(params.genesis_hash)
             .context("coin genesis hash is not a block hash")?;
@@ -865,6 +873,38 @@ mod tests {
             .expect("built-in btc")
             .params(Network::Mainnet)
             .expect("btc mainnet params")
+    }
+
+    #[test]
+    fn btcx_open_uses_network_aware_coin_type() {
+        use keys_btcx::COIN_BTCX;
+        let seed = WalletSeed::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        // Opening the BTCX wallet must derive at the per-network coin type:
+        // mainnet on COIN_BTCX, testnet/regtest on the shared 1'.
+        for (network, ct) in [
+            (Network::Mainnet, COIN_BTCX),
+            (Network::Testnet, 1u32),
+            (Network::Regtest, 1u32),
+        ] {
+            let dir = temp_data_dir();
+            let params = registry::get("btcx")
+                .expect("built-in btcx")
+                .params(network)
+                .expect("btcx params");
+            let handle = WalletManager::new(&dir)
+                .open("btcx", params, &seed, DescriptorKind::Bip84)
+                .unwrap();
+            let desc = handle
+                .lock()
+                .unwrap()
+                .wallet
+                .public_descriptor(KeychainKind::External)
+                .to_string();
+            assert!(
+                desc.contains(&format!("/84'/{ct}'/")) || desc.contains(&format!("/84h/{ct}h/")),
+                "btcx {network:?} must derive at coin type {ct}', got descriptor {desc}"
+            );
+        }
     }
 
     #[test]
