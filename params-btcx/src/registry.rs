@@ -216,9 +216,43 @@ pub fn bip32_coin_type(coin_id: &str) -> Result<u32> {
         .with_context(|| format!("unknown coin {coin_id:?} (not in the shipped registry)"))
 }
 
+/// The BIP-32 coin type for the BTCX asset on `network`.
+///
+/// Mainnet uses the registered per-asset coin type ([`COIN_BTCX`], spec
+/// §4.1); testnet and regtest use the shared SLIP-44 testnet coin type
+/// (`1'`), matching Bitcoin Core and the Phoenix wallet. The network params
+/// (tprv/tpub, `tb1`/`bcrt1`) already keep the keys apart, so a bespoke
+/// per-asset testnet coin type buys nothing and only breaks portability with
+/// Core-style tooling — the §4.1 deviation is deliberately scoped to test
+/// networks.
+///
+/// This is BTCX-specific. Every other coin keeps its registry
+/// [`bip32_coin_type`] on all networks. Callers deriving BTCX wallet keys
+/// must route through this (not [`bip32_coin_type`], which is network-blind).
+pub fn btcx_coin_type(network: Network) -> u32 {
+    match network {
+        Network::Mainnet => COIN_BTCX,
+        Network::Testnet | Network::Regtest => 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn btcx_coin_type_is_network_aware() {
+        // Mainnet keeps the registered per-asset coin type; test networks
+        // fall back to the shared SLIP-44 testnet coin type 1'.
+        assert_eq!(btcx_coin_type(Network::Mainnet), COIN_BTCX);
+        assert_eq!(btcx_coin_type(Network::Testnet), 1);
+        assert_eq!(btcx_coin_type(Network::Regtest), 1);
+        // Mainnet must still equal the network-blind registry value.
+        assert_eq!(
+            btcx_coin_type(Network::Mainnet),
+            bip32_coin_type("btcx").unwrap()
+        );
+    }
 
     #[test]
     fn registry_lookup() {
