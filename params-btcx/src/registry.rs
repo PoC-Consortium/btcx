@@ -134,7 +134,7 @@ fn leak_params(p: BuiltParams) -> &'static ChainParams {
         bech32_hrp: Box::leak(p.bech32_hrp.into_boxed_str()),
         genesis_hash: Box::leak(p.genesis_hash.into_boxed_str()),
         target_spacing_secs: p.target_spacing_secs,
-        min_feerate_sat_vb: p.min_feerate_sat_vb,
+        min_feerate_sat_kvb: p.min_feerate_sat_kvb,
     }))
 }
 

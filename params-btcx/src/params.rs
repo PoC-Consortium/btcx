@@ -68,13 +68,16 @@ pub struct ChainParams {
     pub genesis_hash: &'static str,
     /// Target block spacing in seconds.
     pub target_spacing_secs: u32,
-    /// Minimum feerate (sat/vB) this coin's node will accept for a wallet spend.
-    /// Bitcoin's default is 1, but some chains bake in a higher wallet `-mintxfee`
-    /// (Litecoin's is ~10) that no RPC exposes, so a spend below it is rejected
-    /// outright (-6 "lower than the minimum fee rate setting"). Floors the
-    /// caller's fee-rate selection. From coins.toml (`min_feerate_sat_vb`)
-    /// for file coins; 1 for the Bitcoin-derived built-ins.
-    pub min_feerate_sat_vb: u64,
+    /// Minimum feerate in sat/kvB (100 = 0.1 sat/vB) this coin's node will
+    /// accept for a wallet spend. Core v30+ defaults to a 0.1 sat/vB relay
+    /// minimum, but some chains bake in a higher wallet `-mintxfee`
+    /// (Litecoin's is ~10 sat/vB = 10_000) that no RPC exposes, so a spend
+    /// below it is rejected outright (-6 "lower than the minimum fee rate
+    /// setting"). Floors the caller's fee-rate selection. From coins.toml
+    /// (`min_feerate_sat_vb`, human sat/vB, fractions allowed); 100 for the
+    /// built-ins. Integer sat/kvB is the internal feerate unit everywhere —
+    /// f64 only exists at human-facing edges.
+    pub min_feerate_sat_kvb: u64,
 }
 
 pub const BTCX_MAINNET: ChainParams = ChainParams {
@@ -89,7 +92,7 @@ pub const BTCX_MAINNET: ChainParams = ChainParams {
     bech32_hrp: "pocx",
     genesis_hash: "6ab422073e327d42a0e5dfaaa26564324ddb225e53c64da89283cd4e3dfb7ac6",
     target_spacing_secs: 120,
-    min_feerate_sat_vb: 1,
+    min_feerate_sat_kvb: 100,
 };
 
 pub const BTCX_TESTNET: ChainParams = ChainParams {
@@ -104,7 +107,7 @@ pub const BTCX_TESTNET: ChainParams = ChainParams {
     bech32_hrp: "tpocx",
     genesis_hash: "181c51a172fe20c203e463f6f203b7d9be388fa0f1282e507192f94d24a57e81",
     target_spacing_secs: 120,
-    min_feerate_sat_vb: 1,
+    min_feerate_sat_kvb: 100,
 };
 
 pub const BTCX_REGTEST: ChainParams = ChainParams {
@@ -119,7 +122,7 @@ pub const BTCX_REGTEST: ChainParams = ChainParams {
     bech32_hrp: "rpocx",
     genesis_hash: "2a98a52253aeff06093948b00568d380b7634621bc606403127973c9acbbfde0",
     target_spacing_secs: 120,
-    min_feerate_sat_vb: 1,
+    min_feerate_sat_kvb: 100,
 };
 
 pub const BTC_MAINNET: ChainParams = ChainParams {
@@ -134,7 +137,7 @@ pub const BTC_MAINNET: ChainParams = ChainParams {
     bech32_hrp: "bc",
     genesis_hash: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
     target_spacing_secs: 600,
-    min_feerate_sat_vb: 1,
+    min_feerate_sat_kvb: 100,
 };
 
 pub const BTC_TESTNET: ChainParams = ChainParams {
@@ -149,7 +152,7 @@ pub const BTC_TESTNET: ChainParams = ChainParams {
     bech32_hrp: "tb",
     genesis_hash: "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943",
     target_spacing_secs: 600,
-    min_feerate_sat_vb: 1,
+    min_feerate_sat_kvb: 100,
 };
 
 pub const BTC_REGTEST: ChainParams = ChainParams {
@@ -164,7 +167,7 @@ pub const BTC_REGTEST: ChainParams = ChainParams {
     bech32_hrp: "bcrt",
     genesis_hash: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
     target_spacing_secs: 600,
-    min_feerate_sat_vb: 1,
+    min_feerate_sat_kvb: 100,
 };
 
 impl ChainParams {

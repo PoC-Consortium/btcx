@@ -69,9 +69,10 @@ pub struct NetEntry {
     /// Minimum feerate (sat/vB) this coin's node accepts for a wallet spend on
     /// this network. Litecoin's wallet `-mintxfee` is ~10 and is exposed by no
     /// RPC, so a spend below it is rejected (-6 "lower than the minimum fee rate
-    /// setting"). Optional, per-network; defaults to 1 (Bitcoin's floor).
+    /// setting"). Optional, per-network, HUMAN sat/vB (fractions allowed:
+    /// 0.1); defaults to 0.1 (Core v30's relay floor).
     #[serde(default)]
-    pub min_feerate_sat_vb: Option<u64>,
+    pub min_feerate_sat_vb: Option<f64>,
     pub consensus: ConsensusEntry,
 }
 
@@ -136,7 +137,7 @@ pub struct BuiltParams {
     pub bech32_hrp: String,
     pub genesis_hash: String,
     pub target_spacing_secs: u32,
-    pub min_feerate_sat_vb: u64,
+    pub min_feerate_sat_kvb: u64,
 }
 
 /// Parse + validate a `coins.toml` document into owned [`BuiltCoin`]s.
@@ -208,8 +209,10 @@ fn build_params(
     target_spacing_secs: u32,
 ) -> Result<Option<BuiltParams>> {
     let Some(entry) = entry else { return Ok(None) };
-    // Per-network fee floor; absent → Bitcoin's 1 sat/vB.
-    let min_feerate_sat_vb = entry.min_feerate_sat_vb.unwrap_or(1).max(1);
+    // Per-network fee floor; absent → Core v30's 0.1 sat/vB. Human sat/vB
+    // (f64, edge-only) → internal integer sat/kvB.
+    let min_feerate_sat_kvb =
+        ((entry.min_feerate_sat_vb.unwrap_or(0.1) * 1000.0).round() as u64).max(1);
     let c = &entry.consensus;
     // header_format is optional (Core-RPC coins never use it); default Bitcoin.
     let header_format = match &c.header_format {
@@ -255,7 +258,7 @@ fn build_params(
         bech32_hrp: hrp,
         genesis_hash,
         target_spacing_secs,
-        min_feerate_sat_vb,
+        min_feerate_sat_kvb,
     }))
 }
 

@@ -43,7 +43,7 @@ fn is_already_broadcast(err: &anyhow::Error) -> bool {
 /// `ceil` here silently DOUBLED every fee at the bottom of the market:
 /// a 1.01 sat/vB estimate became 2 on both the send presets and every
 /// fee-priced spend. Rounding down by a fraction is safe everywhere this
-/// feeds — callers floor the result at 1 / `min_feerate_sat_vb`. The one
+/// feeds — callers floor the result at the coin's `min_feerate_sat_kvb`. The one
 /// conversion that must NEVER round down — the BIP125 incremental-relay
 /// increment — keeps its own `ceil` at its use site.
 pub fn btc_kvb_to_sat_kvb(btc_kvb: f64) -> u64 {
@@ -957,11 +957,25 @@ impl ElectrumBackend {
     /// empty, so the relay minimum suffices (floored to the coin's own
     /// minimum). Electrum's `estimatefee` takes only a block target — there
     /// is no economical/conservative mode distinction.
+    /// Floor for ESTIMATOR-driven rates (presets, target fallbacks):
+    /// 1 sat/vB. Explicit user rates bypass this and only respect the
+    /// coin's own `min_feerate_sat_kvb` (0.1 sat/vB by default) — the
+    /// preset floor protects miner revenue, the explicit path trusts
+    /// the user.
+    const ESTIMATE_FLOOR_SAT_KVB: u64 = 1000;
+
     pub fn fee_rate_for(&self, conf_target: u16) -> Result<u64> {
         Ok(self
             .fee_estimate_kvb(conf_target)?
             .map(|kvb| kvb_to_vb_round(kvb).max(1))
-            .unwrap_or(self.params.min_feerate_sat_vb.max(1)))
+            .unwrap_or(
+                kvb_to_vb_round(
+                    self.params
+                        .min_feerate_sat_kvb
+                        .max(Self::ESTIMATE_FLOOR_SAT_KVB),
+                )
+                .max(1),
+            ))
     }
 
     /// The estimator's RAW answer for `conf_target` in sat/vB — `None` when
@@ -991,17 +1005,22 @@ impl ElectrumBackend {
             .filter(|btc_kb| *btc_kb > 0.0) // -1 = no estimate available
             .map(btc_kvb_to_sat_kvb)
             .map(|est| {
-                est.clamp(1, SANITY_MAX_SAT_PER_VB * 1000)
-                    .max(self.params.min_feerate_sat_vb * 1000)
+                est.clamp(1, SANITY_MAX_SAT_PER_VB * 1000).max(
+                    self.params
+                        .min_feerate_sat_kvb
+                        .max(Self::ESTIMATE_FLOOR_SAT_KVB),
+                )
             }))
     }
 
     /// [`Self::fee_rate_for`] at sat/kvB resolution (same fallback
     /// semantics).
     pub fn fee_rate_for_kvb(&self, conf_target: u16) -> Result<u64> {
-        Ok(self
-            .fee_estimate_kvb(conf_target)?
-            .unwrap_or(self.params.min_feerate_sat_vb.max(1) * 1000))
+        Ok(self.fee_estimate_kvb(conf_target)?.unwrap_or(
+            self.params
+                .min_feerate_sat_kvb
+                .max(Self::ESTIMATE_FLOOR_SAT_KVB),
+        ))
     }
 
     /// Resolve a [`SendFee`] to the sat/kvB rate a send prices itself at:
@@ -1012,7 +1031,7 @@ impl ElectrumBackend {
             SendFee::Target(conf_target) => self.fee_rate_for_kvb(conf_target),
             SendFee::RatePerKvb(rate) => Ok(rate
                 .clamp(1, SANITY_MAX_SAT_PER_VB * 1000)
-                .max(self.params.min_feerate_sat_vb * 1000)),
+                .max(self.params.min_feerate_sat_kvb)),
         }
     }
 }
