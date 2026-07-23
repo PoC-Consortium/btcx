@@ -234,16 +234,18 @@ impl SeedStore {
     /// plaintext are NOT encrypted. Callers gate networks on this (#120).
     pub fn seed_is_encrypted(&self) -> Result<bool> {
         let path = self.dir.join(SEED_FILE);
-        let contents = std::fs::read_to_string(&path)
-            .with_context(|| format!("no seed at {} — create or import one first", path.display()))?;
+        let contents = std::fs::read_to_string(&path).with_context(|| {
+            format!("no seed at {} — create or import one first", path.display())
+        })?;
         Ok(is_encrypted_seed_file(&contents))
     }
 
     /// Read and decrypt the stored mnemonic phrase.
     pub fn mnemonic(&self) -> Result<String> {
         let path = self.dir.join(SEED_FILE);
-        let contents = std::fs::read_to_string(&path)
-            .with_context(|| format!("no seed at {} — create or import one first", path.display()))?;
+        let contents = std::fs::read_to_string(&path).with_context(|| {
+            format!("no seed at {} — create or import one first", path.display())
+        })?;
         self.decrypt_contents(contents.trim())
     }
 
