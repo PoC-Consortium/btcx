@@ -87,6 +87,18 @@ fn spk_to_address(params: &ChainParams, spk: &ScriptBuf) -> Result<String> {
     }
 }
 
+/// The wallet's balance split into bdk's four classes (sats). For DISPLAY —
+/// `confirmed + trusted_pending` is what [`Wallet::wallet_balance`] reports
+/// as spendable; `untrusted_pending` is inbound value awaiting its first
+/// confirmation; `immature` is unmatured coinbase.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct BalanceBuckets {
+    pub confirmed: u64,
+    pub trusted_pending: u64,
+    pub untrusted_pending: u64,
+    pub immature: u64,
+}
+
 /// One entry of the wallet's activity feed: direction + net amount from
 /// the wallet's point of view.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -476,6 +488,22 @@ impl BdkWalletBackend {
     /// Confirmed wallet balance in base units.
     pub fn wallet_balance(&self) -> Result<u64> {
         self.with_wallet(|entry| Ok(entry.wallet.balance().trusted_spendable().to_sat()))
+    }
+
+    /// The wallet's full balance buckets (sats) — bdk's four classes, for
+    /// DISPLAY: a pending inbound payment must show as "pending", never as an
+    /// empty wallet. Spend gates keep using [`Self::wallet_balance`]
+    /// (trusted-spendable) — these buckets never authorize anything.
+    pub fn wallet_balance_buckets(&self) -> Result<BalanceBuckets> {
+        self.with_wallet(|entry| {
+            let b = entry.wallet.balance();
+            Ok(BalanceBuckets {
+                confirmed: b.confirmed.to_sat(),
+                trusted_pending: b.trusted_pending.to_sat(),
+                untrusted_pending: b.untrusted_pending.to_sat(),
+                immature: b.immature.to_sat(),
+            })
+        })
     }
 
     /// Send exactly `amount_sat` to `address`, priced by `fee` and
