@@ -180,7 +180,7 @@ impl SeedStore {
     /// storage, and 128 bits already matches secp256k1's security level — 24
     /// (256-bit) for those who want the longer phrase.
     pub fn create_seed(&mut self, passphrase: Option<&str>, words: usize) -> Result<String> {
-        let phrase = self.generate_mnemonic(words)?;
+        let phrase = Self::generate_mnemonic(words)?;
         self.install_seed(&phrase, passphrase)?;
         Ok(phrase)
     }
@@ -188,8 +188,10 @@ impl SeedStore {
     /// Generate a fresh random BIP39 mnemonic **without persisting it** — for an
     /// onboarding flow that shows + confirms the phrase before committing. The
     /// mnemonic is only written once it's passed back to [`Self::import_seed`].
-    /// `words`: 12 or 24, see [`Self::create_seed`].
-    pub fn generate_mnemonic(&self, words: usize) -> Result<String> {
+    /// `words`: 12 or 24, see [`Self::create_seed`]. ASSOCIATED (no `&self`):
+    /// it touches no store state, and the lazy-create onboarding wizard needs
+    /// a phrase before any merchant/store exists at all.
+    pub fn generate_mnemonic(words: usize) -> Result<String> {
         let bytes = match words {
             12 => 16,
             24 => 32,
