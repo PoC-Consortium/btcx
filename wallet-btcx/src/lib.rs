@@ -732,6 +732,26 @@ impl BdkWalletBackend {
         })
     }
 
+    /// The wallet's OWN copy of `txid` — a purely local read, no chain
+    /// I/O. Freshly built txs (a send, an RBF replacement) are applied to
+    /// the cache at broadcast, so this serves them immediately — where a
+    /// server fetch of a just-broadcast tx can race the Electrum index
+    /// (field: a funding bump's post-broadcast vout lookup got "missing
+    /// transaction" and stranded a swap pointer on the dead pre-RBF txid).
+    pub fn wallet_tx(&self, txid: &str) -> Result<Transaction> {
+        let txid = Txid::from_str(txid)?;
+        self.with_wallet(|entry| {
+            Ok(entry
+                .wallet
+                .get_tx(txid)
+                .with_context(|| format!("tx {txid} not known to the nodeless wallet"))?
+                .tx_node
+                .tx
+                .as_ref()
+                .clone())
+        })
+    }
+
     /// The wallet-OWNED change output of `funding_txid` — `(vout,
     /// value_sat, spk)` — for a CPFP child on a build-and-hold funding.
     /// Identified positively by ownership (`exclude_spk` — the funded
