@@ -41,7 +41,9 @@ use anyhow::{anyhow, Context, Result};
 use bdk_wallet::chain::ChainPosition;
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{KeychainKind, SignOptions, Wallet};
-use bitcoin::{Amount, BlockHash, FeeRate, Psbt, ScriptBuf, Sequence, Transaction, TxOut, Txid};
+use bitcoin::{
+    Amount, BlockHash, FeeRate, OutPoint, Psbt, ScriptBuf, Sequence, Transaction, TxOut, Txid,
+};
 
 use electrum_btcx::{
     ElectrumBackend, SendFee, SyncWorker, WalletEntry, WalletHandle, FIRST_SYNC_WAIT,
@@ -410,7 +412,11 @@ impl BdkWalletBackend {
     }
 
     /// Build + sign a spend of `amount_sat` to `spk` priced by `fee` (market
-    /// estimate at a target, or an explicit user rate).
+    /// estimate at a target, or an explicit user rate). `confirmed_only`
+    /// restricts coin selection to CONFIRMED UTXOs — the swap-funding rule
+    /// (2026-08-09 post-mortem): a funding chained on an unconfirmed,
+    /// bump-eligible parent is permanently orphaned when that parent is
+    /// RBF-replaced, and bdk's selector is otherwise confirmation-blind.
     fn build_signed(
         &self,
         entry: &mut WalletEntry,
@@ -418,15 +424,22 @@ impl BdkWalletBackend {
         amount_sat: u64,
         fee: SendFee,
         sequence: Sequence,
+        confirmed_only: bool,
     ) -> Result<Transaction> {
         // resolve_send_fee is sat/kvB; bdk's FeeRate is sat/kwu = sat/kvB ÷ 4
         // (1 vB = 4 wu), so the estimator's fraction carries exactly.
         let feerate = FeeRate::from_sat_per_kwu((self.chain.resolve_send_fee(fee)? + 2) / 4);
+        let unspendable = if confirmed_only {
+            unconfirmed_outpoints(entry)
+        } else {
+            Vec::new()
+        };
         let mut builder = entry.wallet.build_tx();
         builder
             .add_recipient(spk, Amount::from_sat(amount_sat))
             .fee_rate(feerate)
-            .set_exact_sequence(sequence);
+            .set_exact_sequence(sequence)
+            .unspendable(unspendable);
         let mut psbt = builder.finish().map_err(|e| anyhow!("building tx: {e}"))?;
         self.finalize(entry, &mut psbt)?;
         psbt.extract_tx().map_err(|e| anyhow!("extracting tx: {e}"))
@@ -510,6 +523,32 @@ impl BdkWalletBackend {
     /// broadcast BIP125-replaceable (the owner bumps sends via
     /// [`Self::wallet_bumpfee`]).
     pub fn wallet_send(&self, address: &str, amount_sat: u64, fee: SendFee) -> Result<String> {
+        self.send_inner(address, amount_sat, fee, false)
+    }
+
+    /// [`Self::wallet_send`] restricted to CONFIRMED inputs — the v1
+    /// swap-funding send (2026-08-09 post-mortem hard rule): a funding must
+    /// never chain on an unconfirmed, bump-eligible parent, because an RBF
+    /// replacement of that parent orphans the funding irrecoverably (gone
+    /// from every mempool, nothing on chain to re-adopt). Ordinary sends
+    /// keep spending own unconfirmed change ([`Self::wallet_send`]).
+    #[cfg(feature = "swap-support")]
+    pub fn wallet_send_confirmed(
+        &self,
+        address: &str,
+        amount_sat: u64,
+        fee: SendFee,
+    ) -> Result<String> {
+        self.send_inner(address, amount_sat, fee, true)
+    }
+
+    fn send_inner(
+        &self,
+        address: &str,
+        amount_sat: u64,
+        fee: SendFee,
+        confirmed_only: bool,
+    ) -> Result<String> {
         let spk = self.params.parse_address(address)?;
         let txid = self.with_synced_wallet(|entry| {
             let tx = self.build_signed(
@@ -518,6 +557,7 @@ impl BdkWalletBackend {
                 amount_sat,
                 fee,
                 Sequence::ENABLE_RBF_NO_LOCKTIME,
+                confirmed_only,
             )?;
             // Broadcast-before-persist: a crash after broadcast re-learns
             // the tx from our own spk history on the next sync, never
@@ -545,6 +585,9 @@ impl BdkWalletBackend {
             // built-but-unbroadcast fundings are already out of the
             // canonical UTXO set (apply_unconfirmed_txs locked them), so the
             // drain cannot claw back a reservation.
+            // Sweeps keep the confirmation-blind selection deliberately: a
+            // sweep MEANS "everything spendable", and its child-of-change
+            // risk is the owner's explicit choice, not an engine liability.
             let mut builder = entry.wallet.build_tx();
             builder
                 .drain_wallet()
@@ -585,12 +628,17 @@ impl BdkWalletBackend {
     ) -> Result<(String, u32, String)> {
         let spk = self.params.parse_address(address)?;
         let built = self.with_synced_wallet(|entry| {
+            // Confirmed inputs only: the v2 funding txid is committed into
+            // pre-signed MuSig2 redeems, so chaining it on a replaceable
+            // unconfirmed parent would be even worse than the v1 shape —
+            // an orphaned funding invalidates the whole signed bundle.
             let tx = self.build_signed(
                 entry,
                 spk.clone(),
                 amount_sat,
                 fee,
                 Sequence::ENABLE_LOCKTIME_NO_RBF,
+                true,
             )?;
             let txid = tx.compute_txid();
             let vout = tx
@@ -802,6 +850,18 @@ impl BdkWalletBackend {
         // send path uses, ceil'd here because this feeds an RBF acceptance check.
         let feerate = FeeRate::from_sat_per_kwu(feerate_sat_kvb.div_ceil(4));
         let txid = self.with_synced_wallet(|entry| {
+            // Descendant belt (2026-08-09 post-mortem; Core's `bumpfee`
+            // refuses identically): replacing a tx invalidates every child
+            // chained on its outputs — an own wallet tx among them would be
+            // orphaned outright, so refuse. bdk's `build_fee_bump` does not
+            // check this itself. Phrase matches Core ("descendants in the
+            // wallet") so callers classify both backends the same way.
+            let children = wallet_descendants(entry, txid);
+            anyhow::ensure!(
+                children.is_empty(),
+                "cannot bump {txid}: it has descendants in the wallet ({children:?}) — \
+                 replacing it would orphan them"
+            );
             let mut builder = entry
                 .wallet
                 .build_fee_bump(txid)
@@ -821,6 +881,36 @@ impl BdkWalletBackend {
         self.poke_worker();
         Ok(txid)
     }
+}
+
+/// Outpoints of every UNCONFIRMED wallet UTXO — the exclusion set for
+/// confirmed-only sends. Free function (no chain I/O — the caller synced)
+/// so the rule is unit-testable without an Electrum server.
+fn unconfirmed_outpoints(entry: &WalletEntry) -> Vec<OutPoint> {
+    entry
+        .wallet
+        .list_unspent()
+        .filter(|u| matches!(u.chain_position, ChainPosition::Unconfirmed { .. }))
+        .map(|u| u.outpoint)
+        .collect()
+}
+
+/// Canonical wallet txs spending any output of `txid` — the txs an RBF
+/// replacement of `txid` would orphan. Free function so the bumpfee
+/// descendant belt is unit-testable without an Electrum server.
+fn wallet_descendants(entry: &WalletEntry, txid: Txid) -> Vec<Txid> {
+    entry
+        .wallet
+        .transactions()
+        .filter(|wtx| {
+            wtx.tx_node
+                .tx
+                .input
+                .iter()
+                .any(|i| i.previous_output.txid == txid)
+        })
+        .map(|wtx| wtx.tx_node.txid)
+        .collect()
 }
 
 /// Hand out an external address spk under the [`MAX_UNUSED_AHEAD`] cap:
@@ -1163,6 +1253,142 @@ mod tests {
         let act = wallet_activity(entry);
         assert_eq!(act.len(), 1);
         assert_eq!(act[0].txid, fund_txid.to_string());
+
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 2026-08-09 post-mortem: (a) confirmed-only selection must refuse to
+    /// chain a swap funding on unconfirmed change (bdk's selector is
+    /// confirmation-blind without the exclusion set), and (b) the bumpfee
+    /// descendant belt must see a wallet child chained on a tx's outputs.
+    #[test]
+    fn confirmed_only_selection_and_descendant_belt() {
+        use bitcoin::hashes::Hash;
+
+        let dir = temp_data_dir();
+        let params = btc_mainnet();
+        let seed = WalletSeed::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        let handle = WalletManager::new(&dir)
+            .open("btc", params, &seed, DescriptorKind::Bip86)
+            .unwrap();
+        let mut guard = handle.lock().unwrap();
+        let entry = &mut *guard;
+
+        // Confirmed 100k UTXO (same fixture as the input-reservation test).
+        let spk0 = entry
+            .wallet
+            .reveal_next_address(KeychainKind::External)
+            .address
+            .script_pubkey();
+        let funding = Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: OutPoint {
+                    txid: Txid::from_byte_array([2u8; 32]),
+                    vout: 0,
+                },
+                ..Default::default()
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: spk0,
+            }],
+        };
+        let fund_txid = funding.compute_txid();
+        let h1 = BlockHash::from_byte_array([1u8; 32]);
+        let genesis = entry.wallet.latest_checkpoint().block_id();
+        let cp = CheckPoint::from_block_ids([
+            genesis,
+            BlockId {
+                height: 1,
+                hash: h1,
+            },
+        ])
+        .unwrap();
+        let mut tx_update = TxUpdate::<ConfirmationBlockTime>::default();
+        tx_update.txs.push(Arc::new(funding));
+        tx_update.anchors.insert((
+            ConfirmationBlockTime {
+                block_id: BlockId {
+                    height: 1,
+                    hash: h1,
+                },
+                confirmation_time: 1_000,
+            },
+            fund_txid,
+        ));
+        entry
+            .wallet
+            .apply_update(Update {
+                last_active_indices: BTreeMap::new(),
+                tx_update,
+                chain: Some(cp),
+            })
+            .unwrap();
+
+        // A first "swap funding" spends the lone confirmed coin; its change
+        // is the only spendable UTXO left — and it is UNCONFIRMED.
+        let leg_spk = ScriptBuf::from_hex(&format!("5120{}", "ab".repeat(32))).unwrap();
+        let mut builder = entry.wallet.build_tx();
+        builder
+            .add_recipient(leg_spk.clone(), Amount::from_sat(40_000))
+            .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+            .set_exact_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let mut psbt = builder.finish().unwrap();
+        assert!(entry
+            .wallet
+            .sign(&mut psbt, SignOptions::default())
+            .unwrap());
+        let parent = psbt.extract_tx().unwrap();
+        let parent_txid = parent.compute_txid();
+        entry.wallet.apply_unconfirmed_txs([(parent, 2_000)]);
+
+        // The exclusion set names exactly the unconfirmed change.
+        let excl = unconfirmed_outpoints(entry);
+        assert_eq!(excl.len(), 1, "exclusion set: {excl:?}");
+        assert_eq!(excl[0].txid, parent_txid);
+
+        // Confirmed-only selection REFUSES to chain a second funding …
+        let leg2_spk = ScriptBuf::from_hex(&format!("5120{}", "cd".repeat(32))).unwrap();
+        let mut builder = entry.wallet.build_tx();
+        builder
+            .add_recipient(leg2_spk.clone(), Amount::from_sat(10_000))
+            .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+            .unspendable(excl);
+        assert!(
+            builder.finish().is_err(),
+            "confirmed-only selection must refuse the unconfirmed change"
+        );
+
+        // … while the old confirmation-blind selection happily chains on it
+        // (the exact 2026-08-09 hazard).
+        let mut builder = entry.wallet.build_tx();
+        builder
+            .add_recipient(leg2_spk, Amount::from_sat(10_000))
+            .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
+            .set_exact_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let mut psbt = builder.finish().unwrap();
+        assert!(entry
+            .wallet
+            .sign(&mut psbt, SignOptions::default())
+            .unwrap());
+        let child = psbt.extract_tx().unwrap();
+        let child_txid = child.compute_txid();
+        assert!(
+            child
+                .input
+                .iter()
+                .any(|i| i.previous_output.txid == parent_txid),
+            "the blind build should have chained on the unconfirmed change"
+        );
+        entry.wallet.apply_unconfirmed_txs([(child, 3_000)]);
+
+        // Descendant belt: the parent now has a wallet child (a bump would
+        // orphan it); the child has none.
+        assert_eq!(wallet_descendants(entry, parent_txid), vec![child_txid]);
+        assert!(wallet_descendants(entry, child_txid).is_empty());
 
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
