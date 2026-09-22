@@ -18,7 +18,7 @@ greenfield crates only.
 
 | Crate | Contents |
 |---|---|
-| `params-btcx` | Chain parameters (BTCX mainnet/testnet/regtest + BTC), coin registry, 286-byte Bitcoin PoCX header hashing, bech32/bech32m address encode/parse (`pocx` HRP) |
+| `params-btcx` | Chain parameters (BTCX mainnet/testnet/regtest + BTC), coin registry, 286-byte Bitcoin PoCX header hashing, bech32/bech32m address encode/parse (`pocx` HRP) + base58check legacy P2PKH/P2SH parse |
 | `keys-btcx` | BIP39 seed → BIP-86 descriptors, coin type `0x504F4358` (SLIP-44 1347371864) |
 | `seedstore` | Seed-at-rest: scrypt + ChaCha20Poly1305 (passphrase), OS keyring behind a desktop-only feature |
 | `electrum-btcx` | Electrum connection manager: server list/failover/health, scripthash subscriptions, raw-header fetch with PoCX hashing, background sync worker producing BDK updates |
