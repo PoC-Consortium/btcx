@@ -837,6 +837,23 @@ impl BdkWalletBackend {
         })
     }
 
+    /// Whether `address` is one of THIS wallet's own descriptor-derived
+    /// scripts (bdk `is_mine`). The precise custody answer a swap engine
+    /// needs before completing a cooperative redeem to a recorded sweep
+    /// address: a sweep issued by a Core node wallet (a swap started in
+    /// node mode, later restored nodeless from the seed) is NOT derivable
+    /// from this seed, and paying it would strand the proceeds in a wallet
+    /// this machine may no longer have. `Ok(None)` while the seed is locked
+    /// (no wallet loaded): "unknown" must never be read as "ours".
+    #[cfg(feature = "swap-support")]
+    pub fn wallet_is_mine(&self, address: &str) -> Result<Option<bool>> {
+        let spk = self.params.parse_address(address)?;
+        if self.wallet.is_none() {
+            return Ok(None);
+        }
+        self.with_wallet(|entry| Ok(Some(entry.wallet.is_mine(spk.clone()))))
+    }
+
     /// RBF-bump a wallet-owned tx, targeting `feerate_sat_kvb` (**sat/kvB**,
     /// the estimator's native resolution — so a 1.004 sat/vB tx is bumped
     /// to a precise rate that clears a node's fractional BIP125 Rule-4
@@ -1097,6 +1114,57 @@ mod tests {
                 "bc1p4qhjn9zdvkux4e44uhx8tc55attvtyu358kutcqkudyccelu0was9fqzwh"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A locked backend (no wallet loaded) answers "unknown", never
+    /// "mine"; a loaded wallet recognizes exactly its own descriptor
+    /// scripts — a foreign address (e.g. a Core node wallet's sweep) is
+    /// NOT mine even on the same network.
+    #[test]
+    #[cfg(feature = "swap-support")]
+    fn wallet_is_mine_is_precise_and_unknown_while_locked() {
+        let dir = temp_data_dir();
+        let params = btc_mainnet();
+        let seed = WalletSeed::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        let handle = WalletManager::new(&dir)
+            .open("btc", params, &seed, DescriptorKind::Bip86)
+            .unwrap();
+        let (own, foreign) = {
+            let mut entry = handle.lock().unwrap();
+            let own_spk = entry
+                .wallet
+                .reveal_next_address(KeychainKind::External)
+                .address
+                .script_pubkey();
+            // A BIP-84 address of the SAME seed is a different descriptor:
+            // not this wallet's, exactly like a node wallet's sweep.
+            let other = WalletManager::new(&temp_data_dir())
+                .open("btc", params, &seed, DescriptorKind::Bip84)
+                .unwrap();
+            let foreign_spk = other
+                .lock()
+                .unwrap()
+                .wallet
+                .reveal_next_address(KeychainKind::External)
+                .address
+                .script_pubkey();
+            (
+                spk_to_address(params, &own_spk).unwrap(),
+                spk_to_address(params, &foreign_spk).unwrap(),
+            )
+        };
+        let chain = Arc::new(ElectrumBackend::new(params, "127.0.0.1:1").unwrap());
+        // Locked: no wallet → unknown, for any address.
+        let locked = BdkWalletBackend::new(params, chain.clone(), vec![], None);
+        assert_eq!(locked.wallet_is_mine(&own).unwrap(), None);
+        // Loaded: precise. (A worker is only needed for chain sync; the
+        // ownership read is a pure descriptor question.)
+        let worker = SyncWorker::spawn("btc", chain.clone(), &handle);
+        let backend = BdkWalletBackend::new(params, chain, vec![], Some((handle, worker)));
+        assert_eq!(backend.wallet_is_mine(&own).unwrap(), Some(true));
+        assert_eq!(backend.wallet_is_mine(&foreign).unwrap(), Some(false));
+        assert!(backend.wallet_is_mine("not-an-address").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
