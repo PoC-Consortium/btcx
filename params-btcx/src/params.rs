@@ -10,9 +10,10 @@
 
 use anyhow::{Context, Result};
 use bech32::Hrp;
+use bitcoin::hashes::Hash;
 use bitcoin::witness_program::WitnessProgram;
 use bitcoin::witness_version::WitnessVersion;
-use bitcoin::ScriptBuf;
+use bitcoin::{PubkeyHash, ScriptBuf, ScriptHash};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -242,12 +243,32 @@ impl ChainParams {
         ))
     }
 
-    /// Parse a bech32 segwit address (v0/v1) under this chain's HRP into a
-    /// scriptPubKey. Legacy base58 is not supported — core wallets default
-    /// to bech32 and sweep destinations are always freshly generated.
+    /// Parse an address under this chain into a scriptPubKey.
+    ///
+    /// Accepts bech32/bech32m segwit (v0/v1) under this chain's HRP, plus
+    /// base58check legacy **P2PKH** and **P2SH** under this chain's version
+    /// bytes. Our own handout and sweep addresses are always bech32(m), but a
+    /// send destination is whatever the counterparty hands us — exchanges and
+    /// older wallets still give out `1...` / `3...` (BTC mainnet) deposit
+    /// addresses, and paying them needs nothing beyond the output script.
+    ///
+    /// A well-formed bech32 string under a foreign HRP is a chain mismatch,
+    /// not a legacy address, and is reported as such; only strings that are
+    /// not bech32 at all fall through to the base58 path.
     pub fn parse_address(&self, address: &str) -> Result<ScriptBuf> {
-        let (hrp, version, program) = bech32::segwit::decode(address)
-            .with_context(|| format!("not a bech32 segwit address: {address}"))?;
+        let (hrp, version, program) = match bech32::segwit::decode(address) {
+            Ok(decoded) => decoded,
+            Err(bech32_err) => {
+                return self.parse_base58_address(address).map_err(|base58_err| {
+                    anyhow::anyhow!(
+                        "not a valid {} {:?} address: {address} \
+                         (bech32: {bech32_err}; base58: {base58_err})",
+                        self.coin_id,
+                        self.network
+                    )
+                });
+            }
+        };
         anyhow::ensure!(
             hrp.to_lowercase() == self.bech32_hrp,
             "address HRP {hrp} does not match chain {} {:?} (expected {})",
@@ -259,6 +280,35 @@ impl ChainParams {
             WitnessVersion::try_from(version.to_u8()).context("unsupported witness version")?;
         let witness_program = WitnessProgram::new(version, &program)?;
         Ok(ScriptBuf::new_witness_program(&witness_program))
+    }
+
+    /// Base58check legacy address → scriptPubKey: `version || hash160`
+    /// (21 bytes), version byte matched against this chain's P2PKH / P2SH
+    /// prefixes. A checksum failure, wrong length, or foreign version byte is
+    /// an error — never a silent mis-parse onto another chain.
+    fn parse_base58_address(&self, address: &str) -> Result<ScriptBuf> {
+        let payload = bitcoin::base58::decode_check(address).context("not base58check")?;
+        anyhow::ensure!(
+            payload.len() == 21,
+            "base58 payload is {} bytes, expected 21 (version + hash160)",
+            payload.len()
+        );
+        let version = payload[0];
+        let hash: [u8; 20] = payload[1..].try_into().expect("length checked");
+        if version == self.p2pkh_prefix {
+            Ok(ScriptBuf::new_p2pkh(&PubkeyHash::from_byte_array(hash)))
+        } else if version == self.p2sh_prefix {
+            Ok(ScriptBuf::new_p2sh(&ScriptHash::from_byte_array(hash)))
+        } else {
+            anyhow::bail!(
+                "address version byte 0x{version:02x} does not match chain {} {:?} \
+                 (expected P2PKH 0x{:02x} or P2SH 0x{:02x})",
+                self.coin_id,
+                self.network,
+                self.p2pkh_prefix,
+                self.p2sh_prefix
+            )
+        }
     }
 }
 
@@ -373,5 +423,92 @@ mod tests {
         assert_eq!(spk, ScriptBuf::new_p2wsh(&script.wscript_hash()));
         // Wrong-chain parse must fail.
         assert!(BTC_REGTEST.parse_address(&addr).is_err());
+    }
+    fn h160(hex_str: &str) -> [u8; 20] {
+        hex::decode(hex_str).unwrap().try_into().unwrap()
+    }
+
+    /// Legacy base58check destinations (exchange deposit addresses) parse to
+    /// the P2PKH / P2SH script under the chain's own version bytes. Vectors
+    /// were decoded independently (pure-Python base58check), not with this
+    /// crate.
+    #[test]
+    fn base58_legacy_addresses_parse() {
+        // BTC mainnet P2PKH (version 0x00).
+        let spk = BTC_MAINNET
+            .parse_address("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2")
+            .unwrap();
+        assert_eq!(
+            spk,
+            ScriptBuf::new_p2pkh(&PubkeyHash::from_byte_array(h160(
+                "77bff20c60e522dfaa3350c39b030a5d004e839a"
+            )))
+        );
+        assert!(spk.is_p2pkh());
+
+        // BTC mainnet P2SH (version 0x05) — the "3..." exchange case.
+        let spk = BTC_MAINNET
+            .parse_address("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy")
+            .unwrap();
+        assert_eq!(
+            spk,
+            ScriptBuf::new_p2sh(&ScriptHash::from_byte_array(h160(
+                "b472a266d0bd89c13706a4132ccfb16f7c3b9fcb"
+            )))
+        );
+        assert!(spk.is_p2sh());
+
+        // Testnet/regtest P2PKH (0x6f) and P2SH (0xc4).
+        let spk = BTC_TESTNET
+            .parse_address("mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn")
+            .unwrap();
+        assert_eq!(
+            spk,
+            ScriptBuf::new_p2pkh(&PubkeyHash::from_byte_array(h160(
+                "243f1394f44554f4ce3fd68649c19adc483ce924"
+            )))
+        );
+        let spk = BTC_REGTEST
+            .parse_address("2MzQwSSnBHWHqSAqtTVQ6v47XtaisrJa1Vc")
+            .unwrap();
+        assert_eq!(
+            spk,
+            ScriptBuf::new_p2sh(&ScriptHash::from_byte_array(h160(
+                "4e9f39ca4688ff102128ea4ccda34105324305b0"
+            )))
+        );
+    }
+
+    /// Base58 addresses of another chain, corrupted checksums, and junk are
+    /// all rejected with a version/checksum reason — never mis-parsed.
+    #[test]
+    fn base58_foreign_or_corrupt_addresses_rejected() {
+        // Mainnet BTC address offered to testnet / BTCX: version byte mismatch.
+        let err = BTC_TESTNET
+            .parse_address("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy")
+            .unwrap_err();
+        assert!(err.to_string().contains("version byte 0x05"), "{err:#}");
+        assert!(BTCX_MAINNET
+            .parse_address("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2")
+            .is_err());
+        // Testnet address offered to mainnet.
+        assert!(BTC_MAINNET
+            .parse_address("mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn")
+            .is_err());
+        // One character flipped → checksum failure.
+        assert!(BTC_MAINNET
+            .parse_address("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLz")
+            .is_err());
+        // Junk stays junk, and the message names both decoders.
+        let err = BTC_MAINNET.parse_address("not-an-address").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("bech32:") && msg.contains("base58:"), "{msg}");
+        // A well-formed bech32 string under a foreign HRP is reported as an
+        // HRP mismatch, not shunted into the base58 path.
+        let addr = BTCX_REGTEST
+            .p2wsh_address(&ScriptBuf::from(vec![0x51u8]))
+            .unwrap();
+        let err = BTC_REGTEST.parse_address(&addr).unwrap_err();
+        assert!(err.to_string().contains("HRP"), "{err:#}");
     }
 }
